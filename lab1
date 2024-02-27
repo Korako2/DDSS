@@ -1,0 +1,82 @@
+CREATE OR REPLACE PROCEDURE get_table_columns_info(p_table_name text, p_user_name text) AS
+$BODY$
+DECLARE
+    v_schema_name text;
+    v_column_info record;
+    v_constraint record;
+    v_column_num integer := 0;
+BEGIN
+    -- Находим схему по имени таблицы
+    SELECT table_schema INTO v_schema_name
+    FROM information_schema.tables
+    WHERE table_name = p_table_name;
+
+    IF v_schema_name IS NULL THEN
+        RAISE EXCEPTION 'Таблица с именем % не найдена в схеме пользователя %', p_table_name, p_user_name;
+    END IF;
+
+    -- Выводим заголовок
+    RAISE NOTICE 'Пользователь: % (%)', p_user_name, v_schema_name;
+    RAISE NOTICE 'Таблица: %', p_table_name;
+    RAISE NOTICE ' No. Имя столбца   Атрибуты';
+    RAISE NOTICE ' --- -----------   ------------------------------------------------------';
+
+    -- Получаем информацию о столбцах таблицы
+    FOR v_column_info IN (
+        SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale
+        FROM information_schema.columns
+        WHERE table_name = p_table_name AND table_schema = v_schema_name
+        ORDER BY ordinal_position
+    )
+    LOOP
+        v_column_num := v_column_num + 1;
+
+        -- Выводим информацию о столбце
+        RAISE NOTICE '   % %', v_column_num, v_column_info.column_name;
+        RAISE NOTICE '   Type   : %',
+                     CASE
+                         WHEN v_column_info.data_type = 'character varying' THEN
+                             v_column_info.data_type || '(' || v_column_info.character_maximum_length || ')'
+                         WHEN v_column_info.data_type = 'numeric' THEN
+                             v_column_info.data_type || '(' || v_column_info.numeric_precision || ',' || v_column_info.numeric_scale || ')'
+                         ELSE
+                             v_column_info.data_type
+                     END;
+
+        -- Выводим ограничения (если есть)
+        FOR v_constraint IN (
+            SELECT constraint_name, constraint_type
+            FROM information_schema.table_constraints
+            WHERE table_name = p_table_name AND table_schema = v_schema_name
+              AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')
+        )
+        LOOP
+            RAISE NOTICE '   Constr : "%s" %s %s(%s)',
+                 v_constraint.constraint_name, v_constraint.constraint_type,
+                 CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN 'References' ELSE '' END,
+                 CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN v_constraint.constraint_name ELSE '' END;
+        END LOOP;
+    END LOOP;
+END;
+$BODY$
+LANGUAGE plpgsql;
+
+
+
+
+
+
+
+
+SELECT nspname
+FROM pg_namespace
+WHERE has_schema_privilege('s312471', nspname, 'USAGE');
+
+    FOR v_schema_name IN
+        SELECT nspname
+        FROM pg_namespace
+        WHERE has_schema_privilege('s312471', nspname, 'USAGE')
+    LOOP
+
+
+    END LOOP;
