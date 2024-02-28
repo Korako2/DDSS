@@ -2,22 +2,29 @@ CREATE OR REPLACE PROCEDURE get_table_columns_info(p_table_name text, p_user_nam
 $BODY$
 DECLARE
     v_schema_name text;
+    v_table_name text;
     v_column_info record;
     v_constraint record;
     v_column_num integer := 0;
 BEGIN
-    -- Находим схему по имени таблицы
-    SELECT table_schema INTO v_schema_name
-    FROM information_schema.tables
-    WHERE table_name = p_table_name;
+    FOR v_schema_name IN
+        SELECT nspname
+        FROM pg_namespace
+        WHERE has_schema_privilege(p_user_name, nspname, 'USAGE')
+    LOOP
+        FOR v_table_name IN
+            SELECT relname
+            FROM pg_class
+            WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = v_schema_name)
+            AND relkind = 'r' AND relname = p_table_name
+        LOOP
+            RAISE NOTICE 'Пользователь: % (%)', p_user_name, v_schema_name;
+            RAISE NOTICE 'Таблица: %', v_table_name;
+        END LOOP;
 
-    IF v_schema_name IS NULL THEN
-        RAISE EXCEPTION 'Таблица с именем % не найдена в схеме пользователя %', p_table_name, p_user_name;
-    END IF;
 
-    -- Выводим заголовок
-    RAISE NOTICE 'Пользователь: % (%)', p_user_name, v_schema_name;
-    RAISE NOTICE 'Таблица: %', p_table_name;
+    END LOOP;
+
     RAISE NOTICE ' No. Имя столбца   Атрибуты';
     RAISE NOTICE ' --- -----------   ------------------------------------------------------';
 
@@ -63,20 +70,3 @@ LANGUAGE plpgsql;
 
 
 
-
-
-
-
-
-SELECT nspname
-FROM pg_namespace
-WHERE has_schema_privilege('s312471', nspname, 'USAGE');
-
-    FOR v_schema_name IN
-        SELECT nspname
-        FROM pg_namespace
-        WHERE has_schema_privilege('s312471', nspname, 'USAGE')
-    LOOP
-
-
-    END LOOP;
