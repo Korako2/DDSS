@@ -1,8 +1,8 @@
 CREATE OR REPLACE PROCEDURE get_table_columns_info(p_table_name text, p_user_name text) AS
 $BODY$
 DECLARE
-    v_schema_name text;
-    v_table_name text;
+    v_schema_name record;
+    v_table_name record;
     v_attname record;
     v_column_info record;
     v_constraint record;
@@ -10,113 +10,93 @@ DECLARE
     v_column_num integer := 0;
     not_have_len bool = false;
     result text;
+    constraint_res text;
+    number_of_failed_attempts int = 0;
+    number_of_scheme int = 0;
 BEGIN
     FOR v_schema_name IN
-        SELECT nspname
+        SELECT nspname, oid
         FROM pg_namespace
         WHERE has_schema_privilege(p_user_name, nspname, 'USAGE')
     LOOP
-        FOR v_table_name IN
-            SELECT relname
+        number_of_scheme = number_of_scheme + 1;
+        IF (SELECT relname
             FROM pg_class
-            WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = v_schema_name)
-            AND relkind = 'r' AND relname = p_table_name
-        LOOP
-            RAISE NOTICE 'Пользователь: % (%)', p_user_name, v_schema_name;
-            RAISE NOTICE 'Таблица: %', v_table_name;
-            RAISE NOTICE 'No. Имя столбца   Атрибуты';
-            RAISE NOTICE '--- ------------------   ------------------------------------------------------';
-
-            FOR v_attname IN (
-                SELECT attname, atttypid
-                FROM  pg_attribute
-                WHERE attrelid = (select oid FROM pg_class
-                    WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = v_schema_name)
-                AND relkind = 'r' AND relname = v_table_name) AND attnum > 0
-            )
+            WHERE relnamespace = v_schema_name.oid
+            AND relkind = 'r' AND relname = p_table_name) IS NULL THEN
+                number_of_failed_attempts = number_of_failed_attempts + 1;
+        ELSE
+            FOR v_table_name IN
+                SELECT relname, oid
+                FROM pg_class
+                WHERE relnamespace = v_schema_name.oid
+                AND relkind = 'r' AND relname = p_table_name
             LOOP
-                SELECT typname, typlen, typnotnull INTO v_column_info
-                FROM pg_type
-                WHERE oid = v_attname.atttypid;
-                v_column_num := v_column_num + 1;
+                RAISE NOTICE 'Пользователь: % (%)', p_user_name, v_schema_name.nspname;
+                RAISE NOTICE 'Таблица: %', v_table_name.relname;
+                RAISE NOTICE 'No. Имя столбца   Атрибуты';
+                RAISE NOTICE '--- ------------------   ------------------------------------------------------';
 
-                CASE
-                    WHEN v_column_info.typname = 'varchar' THEN
-                        EXECUTE format('SELECT MAX(LENGTH(%I)) FROM %I', v_attname.attname, v_table_name) INTO v_max_legth;
-                    WHEN v_column_info.typname = 'text' OR v_column_info.typname = 'date' OR v_column_info.typname = 'int4' V THEN
-                        not_have_len = true;
+                FOR v_attname IN (
+                    SELECT attname, atttypid
+                    FROM  pg_attribute
+                    WHERE attrelid = v_table_name.oid AND attnum > 0
+                )
+                LOOP
+                    SELECT typname, typlen, typnotnull INTO v_column_info
+                    FROM pg_type
+                    WHERE oid = v_attname.atttypid;
+                    v_column_num := v_column_num + 1;
 
+                    CASE
+                        WHEN v_column_info.typname = 'varchar' THEN
+                            EXECUTE format('SELECT MAX(LENGTH(%I)) FROM %I', v_attname.attname, v_table_name.relname) INTO v_max_legth;
+                        WHEN v_column_info.typname = 'text' OR v_column_info.typname = 'date' OR v_column_info.typname = 'int4' V THEN
+                            not_have_len = true;
+
+                        ELSE
+                            v_max_legth = v_column_info.typlen;
+                    END CASE;
+
+                    IF not_have_len THEN
+                        SELECT FORMAT('%-3s %-20s Type : %-10s', v_column_num, v_attname.attname, v_column_info.typname) INTO result;
+                        RAISE NOTICE '%', result;
                     ELSE
-                        v_max_legth = v_column_info.typlen;
-                END CASE;
+                        SELECT FORMAT('%-3s %-20s Type : %(%s)', v_column_num, v_attname.attname, v_column_info.typname, v_max_legth) INTO result;
+                        RAISE NOTICE '%', result;
 
-                IF not_have_len THEN
-                    SELECT FORMAT('%-3s %-20s Type : %-10s', v_column_num, v_attname.attname, v_column_info.typname) INTO result;
-                    RAISE NOTICE '%', result;
-                ELSE
-                    SELECT FORMAT('%-3s %-20s Type : %(%s)', v_column_num, v_attname.attname, v_column_info.typname, v_max_legth) INTO result;
-                    RAISE NOTICE '%', result;
+                    END IF;
 
-                END IF;
-                FOR v_constraint IN (
-                SELECT constraint_name, constraint_type
-                    FROM information_schema.table_constraints
-                    WHERE table_name = p_table_name AND table_schema = v_schema_name
-                    AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')
-                )
-                LOOP
-                    RAISE NOTICE '   Constr : "%s" %s %s(%s)',
-                        v_constraint.constraint_name, v_constraint.constraint_type,
-                        CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN 'References' ELSE '' END,
-                        CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN v_constraint.constraint_name ELSE '' END;
-                END LOOP;
+                    FOR v_constraint IN (
+                        SELECT c.conname, c.conrelid, c.confrelid, a.attname, conf.relname as conf_table, a2.attname as conf_column
+                        FROM pg_constraint c
+                        JOIN pg_attribute a ON a.attnum = ANY(c.conkey) AND a.attrelid = c.conrelid
+                        JOIN pg_class conf ON conf.oid = c.confrelid
+                        JOIN pg_attribute a2 ON a2.attnum = ANY(c.confkey) AND a2.attrelid = c.confrelid
+                        WHERE a.attrelid = v_table_name.oid AND a.attname = v_attname.attname
+                    )
+                    LOOP
+                        SELECT FORMAT('                         Constr : %s References %s(%s)', v_constraint.conname, v_constraint.conf_table, v_constraint.conf_column) INTO constraint_res;
+                        RAISE NOTICE '%', constraint_res;
+                    END LOOP;
 
-
-            END LOOP;
-
-
-/*            -- Получаем информацию о столбцах таблицы
-            FOR v_column_info IN (
-                SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale
-                FROM information_schema.columns
-                WHERE table_name = p_table_name AND table_schema = v_schema_name
-                ORDER BY ordinal_position
-            )
-            LOOP
-                v_column_num := v_column_num + 1;
-
-                -- Выводим информацию о столбце
-                RAISE NOTICE '   % %', v_column_num, v_column_info.column_name;
-                RAISE NOTICE '   Type   : %',
-                            CASE
-                                WHEN v_column_info.data_type = 'character varying' THEN
-                                    v_column_info.data_type || '(' || v_column_info.character_maximum_length || ')'
-                                WHEN v_column_info.data_type = 'numeric' THEN
-                                    v_column_info.data_type || '(' || v_column_info.numeric_precision || ',' || v_column_info.numeric_scale || ')'
-                                ELSE
-                                    v_column_info.data_type
-                            END;
-
-                -- Выводим ограничения (если есть)
-                FOR v_constraint IN (
-                    SELECT constraint_name, constraint_type
-                    FROM information_schema.table_constraints
-                    WHERE table_name = p_table_name AND table_schema = v_schema_name
-                    AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')
-                )
-                LOOP
-                    RAISE NOTICE '   Constr : "%s" %s %s(%s)',
-                        v_constraint.constraint_name, v_constraint.constraint_type,
-                        CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN 'References' ELSE '' END,
-                        CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN v_constraint.constraint_name ELSE '' END;
+                    FOR v_constraint IN (
+                        SELECT c.conname, c.conrelid, c.confrelid, a.attname, c.conrelid, c.confkey, c.contype, pg_get_constraintdef(c.oid) as check_condition
+                        FROM pg_constraint c
+                        JOIN pg_attribute a ON a.attnum = ANY(c.conkey) AND a.attrelid =        c.conrelid
+                        WHERE a.attrelid = v_table_name.oid AND c.contype = 'c'AND a.attname = v_attname.attname
+                    )
+                    LOOP
+                        SELECT FORMAT('                         Constr : %s %s', v_constraint.conname, v_constraint.check_condition) INTO constraint_res;
+                        RAISE NOTICE '%', constraint_res;
+                    END LOOP;
                 END LOOP;
             END LOOP;
-            */
-        END LOOP;
-
-
+    END IF;
     END LOOP;
-
+    IF (number_of_failed_attempts = number_of_scheme) THEN
+        RAISE NOTICE 'Данная таблица не найдена';
+    END IF;
 END;
 $BODY$
 LANGUAGE plpgsql;
