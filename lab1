@@ -58,13 +58,24 @@ BEGIN
                     RAISE NOTICE '%', result;
 
                 END IF;
-
+                FOR v_constraint IN (
+                SELECT constraint_name, constraint_type
+                    FROM information_schema.table_constraints
+                    WHERE table_name = p_table_name AND table_schema = v_schema_name
+                    AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')
+                )
+                LOOP
+                    RAISE NOTICE '   Constr : "%s" %s %s(%s)',
+                        v_constraint.constraint_name, v_constraint.constraint_type,
+                        CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN 'References' ELSE '' END,
+                        CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN v_constraint.constraint_name ELSE '' END;
+                END LOOP;
 
 
             END LOOP;
 
 
-            -- Получаем информацию о столбцах таблицы
+/*            -- Получаем информацию о столбцах таблицы
             FOR v_column_info IN (
                 SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale
                 FROM information_schema.columns
@@ -100,6 +111,7 @@ BEGIN
                         CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN v_constraint.constraint_name ELSE '' END;
                 END LOOP;
             END LOOP;
+            */
         END LOOP;
 
 
