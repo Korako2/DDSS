@@ -3,9 +3,13 @@ $BODY$
 DECLARE
     v_schema_name text;
     v_table_name text;
+    v_attname record;
     v_column_info record;
     v_constraint record;
+    v_max_legth int;
     v_column_num integer := 0;
+    not_have_len bool = false;
+    result text;
 BEGIN
     FOR v_schema_name IN
         SELECT nspname
@@ -20,53 +24,87 @@ BEGIN
         LOOP
             RAISE NOTICE 'Пользователь: % (%)', p_user_name, v_schema_name;
             RAISE NOTICE 'Таблица: %', v_table_name;
+            RAISE NOTICE 'No. Имя столбца   Атрибуты';
+            RAISE NOTICE '--- ------------------   ------------------------------------------------------';
+
+            FOR v_attname IN (
+                SELECT attname, atttypid
+                FROM  pg_attribute
+                WHERE attrelid = (select oid FROM pg_class
+                    WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = v_schema_name)
+                AND relkind = 'r' AND relname = v_table_name) AND attnum > 0
+            )
+            LOOP
+                SELECT typname, typlen, typnotnull INTO v_column_info
+                FROM pg_type
+                WHERE oid = v_attname.atttypid;
+                v_column_num := v_column_num + 1;
+
+                CASE
+                    WHEN v_column_info.typname = 'varchar' THEN
+                        EXECUTE format('SELECT MAX(LENGTH(%I)) FROM %I', v_attname.attname, v_table_name) INTO v_max_legth;
+                    WHEN v_column_info.typname = 'text' OR v_column_info.typname = 'date' OR v_column_info.typname = 'int4' V THEN
+                        not_have_len = true;
+
+                    ELSE
+                        v_max_legth = v_column_info.typlen;
+                END CASE;
+
+                IF not_have_len THEN
+                    SELECT FORMAT('%-3s %-20s Type : %-10s', v_column_num, v_attname.attname, v_column_info.typname) INTO result;
+                    RAISE NOTICE '%', result;
+                ELSE
+                    SELECT FORMAT('%-3s %-20s Type : %(%s)', v_column_num, v_attname.attname, v_column_info.typname, v_max_legth) INTO result;
+                    RAISE NOTICE '%', result;
+
+                END IF;
+
+
+
+            END LOOP;
+
+
+            -- Получаем информацию о столбцах таблицы
+            FOR v_column_info IN (
+                SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale
+                FROM information_schema.columns
+                WHERE table_name = p_table_name AND table_schema = v_schema_name
+                ORDER BY ordinal_position
+            )
+            LOOP
+                v_column_num := v_column_num + 1;
+
+                -- Выводим информацию о столбце
+                RAISE NOTICE '   % %', v_column_num, v_column_info.column_name;
+                RAISE NOTICE '   Type   : %',
+                            CASE
+                                WHEN v_column_info.data_type = 'character varying' THEN
+                                    v_column_info.data_type || '(' || v_column_info.character_maximum_length || ')'
+                                WHEN v_column_info.data_type = 'numeric' THEN
+                                    v_column_info.data_type || '(' || v_column_info.numeric_precision || ',' || v_column_info.numeric_scale || ')'
+                                ELSE
+                                    v_column_info.data_type
+                            END;
+
+                -- Выводим ограничения (если есть)
+                FOR v_constraint IN (
+                    SELECT constraint_name, constraint_type
+                    FROM information_schema.table_constraints
+                    WHERE table_name = p_table_name AND table_schema = v_schema_name
+                    AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')
+                )
+                LOOP
+                    RAISE NOTICE '   Constr : "%s" %s %s(%s)',
+                        v_constraint.constraint_name, v_constraint.constraint_type,
+                        CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN 'References' ELSE '' END,
+                        CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN v_constraint.constraint_name ELSE '' END;
+                END LOOP;
+            END LOOP;
         END LOOP;
 
 
     END LOOP;
 
-    RAISE NOTICE ' No. Имя столбца   Атрибуты';
-    RAISE NOTICE ' --- -----------   ------------------------------------------------------';
-
-    -- Получаем информацию о столбцах таблицы
-    FOR v_column_info IN (
-        SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale
-        FROM information_schema.columns
-        WHERE table_name = p_table_name AND table_schema = v_schema_name
-        ORDER BY ordinal_position
-    )
-    LOOP
-        v_column_num := v_column_num + 1;
-
-        -- Выводим информацию о столбце
-        RAISE NOTICE '   % %', v_column_num, v_column_info.column_name;
-        RAISE NOTICE '   Type   : %',
-                     CASE
-                         WHEN v_column_info.data_type = 'character varying' THEN
-                             v_column_info.data_type || '(' || v_column_info.character_maximum_length || ')'
-                         WHEN v_column_info.data_type = 'numeric' THEN
-                             v_column_info.data_type || '(' || v_column_info.numeric_precision || ',' || v_column_info.numeric_scale || ')'
-                         ELSE
-                             v_column_info.data_type
-                     END;
-
-        -- Выводим ограничения (если есть)
-        FOR v_constraint IN (
-            SELECT constraint_name, constraint_type
-            FROM information_schema.table_constraints
-            WHERE table_name = p_table_name AND table_schema = v_schema_name
-              AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')
-        )
-        LOOP
-            RAISE NOTICE '   Constr : "%s" %s %s(%s)',
-                 v_constraint.constraint_name, v_constraint.constraint_type,
-                 CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN 'References' ELSE '' END,
-                 CASE WHEN v_constraint.constraint_type = 'FOREIGN KEY' THEN v_constraint.constraint_name ELSE '' END;
-        END LOOP;
-    END LOOP;
 END;
 $BODY$
 LANGUAGE plpgsql;
-
-
-
